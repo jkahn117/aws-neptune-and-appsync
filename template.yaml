@@ -134,7 +134,7 @@ Resources:
       Type: AWS_LAMBDA
       ServiceRoleArn: !GetAtt AppSyncServiceRole.Arn
       LambdaConfig:
-        LambdaFunctionArn: !GetAtt NeptuneBridgeFunction.Arn
+        LambdaFunctionArn: !GetAtt BridgeFunction.Arn
     
 
   # --- Lambda ----
@@ -206,7 +206,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - "lambda:InvokeFunction"
-                Resource: !GetAtt NeptuneBridgeFunction.Arn
+                Resource: !GetAtt BridgeFunction.Arn
 
   # ---- Networking Resources ----
   # A VPC with two public subnets and two private
