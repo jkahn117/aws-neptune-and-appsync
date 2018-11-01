@@ -1,0 +1,366 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: |
+  NeptuneBridge
+  Connect to Amazon Neptune with SigV4 signing of requests to use IAM.
+    
+Parameters:
+  ProjectName:
+    Type: String
+    Default: neptunebridge
+
+  NeptuneInstanceClass:
+    Type: String
+    Default: db.r4.large
+
+Mappings:
+  SubnetConfig:
+    VPC:
+      CIDR: '10.0.0.0/16'
+    Public1:
+      CIDR: '10.0.0.0/24'
+    Public2:
+      CIDR: '10.0.1.0/24'
+    Private1:
+      CIDR: '10.0.2.0/24'
+    Private2:
+      CIDR: '10.0.3.0/24'
+    Lambda1:
+      CIDR: '10.0.4.0/24'
+    Lambda2:
+      CIDR: '10.0.5.0/24'
+
+# Globals:
+#   Function:
+#     Runtime: nodejs8.10
+#     Handler: index.handler
+#     VpcConfig:
+#       SecurityGroupIds:
+#         - !Ref LambdaSecurityGroup
+#       SubnetIds:
+#         - !Ref LambdaSubnet1
+#         - !Ref LambdaSubnet2
+#     Environment:
+#       Variables:
+#         NEPTUNE_ENDPOINT: !GetAtt NeptuneCluster.Endpoint
+#         NEPTUNE_PORT: 8182
+
+Resources:
+  # --- Neptune ---
+  NeptuneCluster:
+    Type: AWS::Neptune::DBCluster
+    DependsOn: NeptuneSubnets
+    Properties:
+      DBClusterIdentifier: !Ref ProjectName
+      DBSubnetGroupName: !Ref NeptuneSubnets
+      IamAuthEnabled: true
+      VpcSecurityGroupIds:
+        - !Ref NeptuneSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-neptune-cluster"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  NeptuneInstance1:
+    Type: AWS::Neptune::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref NeptuneCluster
+      DBInstanceClass: !Ref NeptuneInstanceClass
+      DBInstanceIdentifier: !Sub "${ProjectName}-neptune"
+      DBSubnetGroupName: !Ref NeptuneSubnets
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-neptune-instance"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  NeptuneSubnets:
+    Type: AWS::Neptune::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub "${ProjectName} Subnet Group"
+      DBSubnetGroupName: !Sub "${ProjectName}-subnet-group"
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-subnet-group"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  NeptuneSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    DependsOn: LambdaSecurityGroup
+    Properties:
+      GroupName: !Sub "${ProjectName}-neptune-security-group"
+      GroupDescription: Allow access to Amazon Neptune from Lambda
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8182
+          ToPort: 8182
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # --- AppSync ---
+  FriendGraphApi:
+    Type: AWS::AppSync::GraphQLApi
+    Properties:
+      AuthenticationType: API_KEY
+      Name: !Sub "${ProjectName}Api"
+  
+  FriendGraphApiKey:
+    Type: AWS::AppSync::ApiKey
+    Properties:
+      ApiId: !GetAtt FriendGraphApi.ApiId
+      Description: API Key for FriendGraph API
+
+  FriendGraphSchema:
+    Type: AWS::AppSync::GraphQLSchema
+    DependsOn: FriendGraphApi
+    Properties:
+      ApiId: !GetAtt FriendGraphApi.ApiId
+      DefinitionS3Location: schema.graphql
+
+  NeptuneBridgeDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt FriendGraphApi.ApiId
+      Name: !Sub "${ProjectName}_neptune_bridge"
+      Description: AppSync data source to Lambda function connecting to Neptune
+      Type: AWS_LAMBDA
+      ServiceRoleArn: !GetAtt AppSyncServiceRole.Arn
+      LambdaConfig:
+        LambdaFunctionArn: !GetAtt NeptuneBridgeFunction.Arn
+    
+
+  # --- Lambda ----
+  BridgeFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      Description: 'Bridge from AppSync to Neptune'
+      CodeUri: neptune-bridge/target/NeptuneBridge-1.0.jar
+      Handler: 'neptunebridge.App::handleRequest'
+      # MemorySize: ''
+      Runtime: java8
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds:
+          - !Ref LambdaSubnet1
+          - !Ref LambdaSubnet2
+      Policies:
+        - VPCAccessPolicy: {}
+        - Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+              - neptune-db:*
+            Resource:
+              - !Sub arn:aws:neptune-db:${AWS::Region}:${AWS::AccountId}:${NeptuneCluster.ClusterResourceId}/*
+      Environment:
+        Variables:
+          NEPTUNE_ENDPOINT: 'mysample-cluster.cluster-cryqwigx1epw.us-east-2.neptune.amazonaws.com'
+          NEPTUNE_PORT: 8182
+          SERVICE_REGION: !Sub ${AWS::Region}
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${ProjectName}-lambda-security-group"
+      GroupDescription: Access from AWS Lambda to Amazon Neptune
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: !FindInMap ['SubnetConfig', 'VPC', 'CIDR']
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  AppSyncServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /neptune-appsync/
+      RoleName: !Sub "${ProjectName}-appsync-service-role"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSAppSyncPushToCloudWatchLogs
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Principal:
+              Service:
+                - appsync.amazonaws.com
+      Policies:
+        - PolicyName: !Sub "${ProjectName}-appsync-recommendation-function-policy"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "lambda:InvokeFunction"
+                Resource: !GetAtt NeptuneBridgeFunction.Arn
+
+  # ---- Networking Resources ----
+  # A VPC with two public subnets and two private
+  # subnets along with an internet gateway.
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      CidrBlock: !FindInMap ['SubnetConfig', 'VPC', 'CIDR']
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-vpc"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: 
+        Fn::Select: 
+        - 0
+        - Fn::GetAZs: !Ref AWS::Region
+      VpcId: !Ref VPC
+      CidrBlock:  !FindInMap ['SubnetConfig', 'Private1', 'CIDR']
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-subnet-1"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: 
+        Fn::Select: 
+        - 1
+        - Fn::GetAZs: !Ref AWS::Region
+      VpcId: !Ref VPC
+      CidrBlock:  !FindInMap ['SubnetConfig', 'Private2', 'CIDR']
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-subnet-2"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  LambdaSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: 
+        Fn::Select: 
+        - 0
+        - Fn::GetAZs: !Ref AWS::Region
+      VpcId: !Ref VPC
+      CidrBlock:  !FindInMap ['SubnetConfig', 'Lambda1', 'CIDR']
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-lambda-subnet-1"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  LambdaSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: 
+        Fn::Select: 
+        - 1
+        - Fn::GetAZs: !Ref AWS::Region
+      VpcId: !Ref VPC
+      CidrBlock:  !FindInMap ['SubnetConfig', 'Lambda2', 'CIDR']
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-lambda-subnet-2"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PrivateRouteTable1Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+
+  #---- Dev ----
+  # For development purposes, including a public subtnet
+  # and internet gateway. We will also build a Cloud9
+  # instance.
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: 
+        Fn::Select: 
+        - 0
+        - Fn::GetAZs: !Ref AWS::Region
+      VpcId: !Ref VPC
+      CidrBlock:  !FindInMap ['SubnetConfig', 'Public1', 'CIDR']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-subnet-1"
+        - Key: Project
+          Value: !Ref ProjectName
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  GatewayAttachement:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref 'VPC'
+      InternetGatewayId: !Ref 'InternetGateway'
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref 'VPC'
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachement
+    Properties:
+      RouteTableId: !Ref 'PublicRouteTable'
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref 'InternetGateway'
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  # Cloud9Env:
+  #   Type: AWS::Cloud9::EnvironmentEC2
+  #   Properties:
+  #     Description: !Sub "Cloud9 Environment to developer ${ProjectName}"
+  #     AutomaticStopTimeMinutes: 30
+  #     InstanceType: t2.small
+  #     Name: !Ref ProjectName
+  #     SubnetId: !Ref PublicSubnet1
+  
+
+Outputs:
+  NeptuneEndpoint:
+    Description: Endpoint for Neptune Cluster
+    Value: !GetAtt NeptuneCluster.Endpoint
+
+  NeptuneReadEndpoint:
+    Description: Read endpoint for Neptune Cluster
+    Value: !GetAtt NeptuneCluster.ReadEndpoint
+
+  GraphQLEndpoint:
+    Description: Endpoint for AppSync
+    Value: !GetAtt FriendGraphApi.GraphQLUrl
