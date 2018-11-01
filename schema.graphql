@@ -1,0 +1,45 @@
+type User {
+  id: ID!
+  name: String!
+  birthDate: AWSDate
+  friends: [User]
+  likes: [Likeable]
+}
+
+interface Likeable {
+  id: ID!
+  title: String!
+}
+
+type Movie implements Likeable {
+  id: ID!
+  title: String!
+  genre: String!
+  rating: String!
+  director: String!
+}
+
+type Book implements Likeable {
+  id: ID!
+  title: String!
+  author: String!
+  genre: String!
+}
+
+
+type Mutation {
+  addLike(userId: ID!, likeableId: ID!): Likeable
+  removeLike(userId: ID!, likeableId: ID!): Likeable
+  addFriend(userId: ID!, friendId: ID!): User
+  removeFriend(userId: ID!, friendId: ID!): User
+}
+
+type Query {
+  getUser(userId: ID!): User
+  
+}
+
+schema {
+  query: Query
+  mutation: Mutation
+}
