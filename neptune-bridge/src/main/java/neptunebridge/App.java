@@ -1,12 +1,7 @@
 package neptunebridge;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.IOException;
-import java.net.URL;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.StringJoiner;
 
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
@@ -45,13 +40,18 @@ public class App implements RequestHandler<AppSyncRequest, Object> {
         Map<String, String> headers = new HashMap<>();
         headers.put("Content-Type", "application/json");
 
-        try {
-            final ResultSet rs = client.submit(input.getQuery());
+        System.out.println(input.getVariables());
 
-            for (Result r : rs) {
-                System.out.println(r);
-            }
-            
+        try {
+            if (input.isValid()) {
+                final ResultSet rs = client.submit(input.getQuery(), input.getVariables());
+
+                for (Result r : rs) {
+                    System.out.println(r);
+                }
+            } else {
+                return new GatewayResponse("{ 'error': 'Missing query' }", headers, 500);
+            }            
             
             return new GatewayResponse("{}", headers, 200);
         } catch (Exception e) {

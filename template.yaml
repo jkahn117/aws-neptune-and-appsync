@@ -164,9 +164,9 @@ Resources:
               - !Sub arn:aws:neptune-db:${AWS::Region}:${AWS::AccountId}:${NeptuneCluster.ClusterResourceId}/*
       Environment:
         Variables:
-          NEPTUNE_ENDPOINT: !GetAtt NeptuneCluster.Endpoint
+          NEPTUNE_ENDPOINT: neptunebridge-neptune.cryqwigx1epw.us-east-2.neptune.amazonaws.com # !GetAtt NeptuneCluster.Endpoint
           NEPTUNE_PORT: 8182
-          SERVICE_REGION: !Sub ${AWS::Region}
+          SERVICE_REGION: us-east-2 #!Sub ${AWS::Region}
 
   LambdaSecurityGroup:
     Type: AWS::EC2::SecurityGroup
