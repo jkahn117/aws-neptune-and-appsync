@@ -144,7 +144,8 @@ Resources:
       Description: 'Bridge from AppSync to Neptune'
       CodeUri: neptune-bridge/target/NeptuneBridge-1.0.jar
       Handler: 'neptunebridge.App::handleRequest'
-      # MemorySize: ''
+      MemorySize: 1024
+      Timeout: 20
       Runtime: java8
       VpcConfig:
         SecurityGroupIds:
@@ -163,7 +164,7 @@ Resources:
               - !Sub arn:aws:neptune-db:${AWS::Region}:${AWS::AccountId}:${NeptuneCluster.ClusterResourceId}/*
       Environment:
         Variables:
-          NEPTUNE_ENDPOINT: 'mysample-cluster.cluster-cryqwigx1epw.us-east-2.neptune.amazonaws.com'
+          NEPTUNE_ENDPOINT: !GetAtt NeptuneCluster.Endpoint
           NEPTUNE_PORT: 8182
           SERVICE_REGION: !Sub ${AWS::Region}
 

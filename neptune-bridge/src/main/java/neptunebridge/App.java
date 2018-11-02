@@ -46,9 +46,7 @@ public class App implements RequestHandler<AppSyncRequest, Object> {
         headers.put("Content-Type", "application/json");
 
         try {
-            System.out.println("before query");
             final ResultSet rs = client.submit(input.getQuery());
-            System.out.println("after query");
 
             for (Result r : rs) {
                 System.out.println(r);
